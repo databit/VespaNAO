@@ -1,11 +1,11 @@
-#include <SoftwareSerial.h>
-#include <SD.h>             
-#include <TMRpcm.h>         
 #include <SPI.h>
+#include <SoftwareSerial.h>
+#include <SdFat.h> // Set "ENABLE_SOFTWARE_SPI_CLASS  = 1" in SdFat/SdFatConfig.h
+#include <TMRpcm.h> // Uncomment "#define SDFAT" in TMRpcm/pcmConfig.h
 
 // Pin Bluetooth
-#define BT_RX 2
-#define BT_TX 3
+#define BT_RX 3
+#define BT_TX 2
 
 // Pin motor
 #define FS1 4
@@ -15,13 +15,16 @@
 #define DS2 12
 
 // Pin rele'
-#define RELE1 9
-#define RELE2 8
-#define RELE3 10
-#define RELE4 11
+#define RELE1 10
+#define RELE2 11
+#define RELE3 8
+#define RELE4 9
 
 // Pin SD
-#define SD_CS A0
+#define SOFT_MISO_PIN A0 // 12
+#define SOFT_SCK_PIN A1  // 13
+#define SOFT_MOSI_PIN A2 // 11
+#define SD_CHIP_SELECT_PIN A3 // 10
 
 // Pin speaker
 #define SPEAKER A4
@@ -29,9 +32,11 @@
 // Global variables
 int releStatus[6] = {0, 0, 0, 0, 0, 0};
 unsigned long time = 0;
-char btCmd = '\0';
-TMRpcm player;
+String btMessage = "";
+String track = "music";
 SoftwareSerial bluetooth(BT_RX,BT_TX);
+SdFatSoftSpi<SOFT_MISO_PIN, SOFT_MOSI_PIN, SOFT_SCK_PIN> sd;
+TMRpcm player;
 
 void setup (){
   // Setup serial monitor
@@ -53,29 +58,53 @@ void setup (){
   pinMode(DS1, OUTPUT);
   pinMode(DS2, OUTPUT);
 
-  // Setup music players and SD
-  player.speakerPin = SPEAKER; // pin utilizzabili 5,6,11 o 46 sulla Mega, 9 sulla Uno, Nano, etc
+  pinMode(RELE1, OUTPUT);
+  pinMode(RELE2, OUTPUT);
+  pinMode(RELE3, OUTPUT);
+  pinMode(RELE4, OUTPUT);
 
-  // per abilitare un'uscita complementare togliere il commento alla riga sotto:
-  // pinMode(10,OUTPUT); pin utilizzabili 9,10; Sulla Mega: 5-2,6-7,11-12,46-45
+  digitalWrite(RELE1, LOW);
+  digitalWrite(RELE2, LOW);
+  digitalWrite(RELE3, LOW);
+  digitalWrite(RELE4, LOW);
 
-  if(!SD.begin(SD_CS)) {
-    Serial.println("SD FAIL");
-  
+  // check rele'
+  digitalWrite(RELE1, HIGH);
+  delay(250);
+  digitalWrite(RELE1, LOW);
+  digitalWrite(RELE2, HIGH);
+  delay(250);
+  digitalWrite(RELE2, LOW);
+  digitalWrite(RELE3, HIGH);
+  delay(250);
+  digitalWrite(RELE3, LOW);
+  digitalWrite(RELE4, HIGH);
+  delay(250);
+  digitalWrite(RELE4, LOW);
+
+  // Setup music players
+  player.speakerPin = SPEAKER;
+  player.quality(1);
+
+  // initialize the first card
+  if (!sd.begin(SD_CHIP_SELECT_PIN)) {
+    Serial.println("SD Disconnected");  
+
   } else {
-    Serial.println("SD OK");
+    Serial.println("SD Connected!");
   }
 }
 
+
 void loop(){
   while(bluetooth.available())
-    btCmd = char(bluetooth.read());  
+    btMessage += char(bluetooth.read());
   
   if(!bluetooth.available()) {
-    if(btCmd != '\0'){
-      Serial.println("BT="+ btCmd);
-  
-      switch(btCmd){
+    if(btMessage.length() > 0){
+      Serial.println("BT="+ btMessage);
+      
+      switch(btMessage[0]){
         // Move forward
         case 'F':
           motorForward(128, 1000);
@@ -84,6 +113,11 @@ void loop(){
         // Move back
         case 'B':
           motorReverse(128, 1000);
+          break;
+
+        // Move back
+        case 'W':
+          motorStop();
           break;
 
         // Indicator left
@@ -112,29 +146,32 @@ void loop(){
           break;
 
         case 'M':
-          if(player.isPlaying()){
-            player.pause();
-          } else {
-            player.play("music");
-          }
+          track = btMessage.substring(1);
 
-        /*
-          case 'S': tmrpcm.stopPlayback(); break;
-          case '=': tmrpcm.volume(1); break;
-          case '-': tmrpcm.volume(0); break;
-          case '0': tmrpcm.quality(0); break;
-          case '1': tmrpcm.quality(1); break;
-          default: break;
-        */
+          if(player.isPlaying())
+            player.stopPlayback(); //pause();
+          
+          else
+            player.play(track.c_str());
+
+          break;
+
+        case 'V':
+          if(btMessage[1] == '+')
+            player.volume(1);
+            
+          else if(btMessage[1] == '-')
+            player.volume(0);
+
           break;
 
       }
-      btCmd = '\0';
-    }
-
+      btMessage = "";
     clearActions();
-    blinkIndicator();
+    }
   }
+  blinkIndicator();
+
   delay(100);
 }
 
@@ -143,19 +180,18 @@ void clearActions(){
     digitalWrite(RELE1, LOW);
     digitalWrite(RELE2, LOW);
 
-  } else { 
-    if(releStatus[1] == 0)
+  } else if(releStatus[1] == 0)
       digitalWrite(RELE1, LOW);
 
-    if(releStatus[2] == 0)
+    else if(releStatus[2] == 0)
       digitalWrite(RELE2, LOW);
 
-    if(releStatus[3] == 0)
-      digitalWrite(RELE3, LOW);
+  if(releStatus[3] == 0)
+    digitalWrite(RELE3, LOW);
 
-    if(releStatus[4] == 0)
-      digitalWrite(RELE4, LOW);
-  }
+  if(releStatus[4] == 0)
+    digitalWrite(RELE4, LOW);
+
 }
 
 void blinkIndicator(){
@@ -174,7 +210,7 @@ void blinkIndicator(){
 
 
 void setIndicator(char channel){
-      switch(btCmd){
+      switch(channel){
         // Indicator left
         case 'L':
           if(releStatus[1] == 0){
@@ -245,7 +281,6 @@ void motorForward(short power, int time){
   digitalWrite(DS2, HIGH);
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, LOW);
-  //digitalWrite(FS1, HIGH);
   analogWrite(FS1, power);
   delay(time);
 }
@@ -256,8 +291,16 @@ void motorReverse(short power, int time){
   digitalWrite(DS2, HIGH);
   digitalWrite(IN1, LOW);
   digitalWrite(IN2, HIGH);
-  //digitalWrite(FS1, HIGH);
   analogWrite(FS1, power);
   delay(time);
+}
+
+// 3 - Stop
+void motorStop(){
+  digitalWrite(DS1, LOW);
+  digitalWrite(DS2, HIGH);
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  analogWrite(FS1, LOW);
 }
 
